@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="popup.css" />
+  <title>DualSub</title>
+</head>
+<body>
+  <div class="dualsub-popup">
+    <!-- Header -->
+    <div class="header">
+      <img src="../icons/icon48.png" alt="DualSub" class="logo" />
+      <div class="header-text">
+        <h1>DualSub</h1>
+        <span class="subtitle">Phụ đề song ngữ YouTube</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="toggleEnabled" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Status -->
+    <div class="status-bar" id="statusBar">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Đang tải...</span>
+    </div>
+
+    <!-- Language Selection -->
+    <div class="section">
+      <h3>Ngôn ngữ</h3>
+      <div class="lang-row">
+        <div class="lang-group">
+          <label for="primaryLang">Ngôn ngữ chính</label>
+          <select id="primaryLang">
+            <option value="en">English</option>
+            <option value="vi">Tiếng Việt</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="zh-Hans">中文</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+          </select>
+        </div>
+        <div class="lang-group">
+          <label for="secondaryLang">Ngôn ngữ phụ</label>
+          <select id="secondaryLang">
+            <option value="vi">Tiếng Việt</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="zh-Hans">中文</option>
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Appearance -->
+    <div class="section">
+      <h3>Hiển thị</h3>
+      <div class="setting-row">
+        <label for="positionSelect">Vị trí</label>
+        <select id="positionSelect">
+          <option value="bottom">Dưới cùng</option>
+          <option value="top">Trên cùng</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label for="fontSizeRange">Cỡ chữ: <span id="fontSizeLabel">16</span>px</label>
+        <input type="range" id="fontSizeRange" min="10" max="32" value="16" />
+      </div>
+    </div>
+
+    <!-- Video Info -->
+    <div class="section video-info">
+      <h3>Thông tin phụ đề</h3>
+      <div class="info-grid">
+        <div class="info-item">
+          <span class="info-label">Chính:</span>
+          <span class="info-value" id="primaryCount">0</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Phụ:</span>
+          <span class="info-value" id="secondaryCount">0</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Trạng thái:</span>
+          <span class="info-value" id="readyState">Chưa sẵn sàng</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button id="btnReload" class="btn btn-secondary">Tải lại phụ đề</button>
+      <a href="#" id="helpLink" class="btn btn-link">Hướng dẫn</a>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <span>DualSub v1.0.0</span>
+      <span>Học tiếng Anh qua khóa học CS</span>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
