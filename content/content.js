@@ -260,9 +260,14 @@
       catch (e) { return ''; }
     },
 
-    _bgMessage(msg) {
+    _bgMessage(msg, timeoutMs) {
+      if (timeoutMs === undefined) timeoutMs = 15000;
       return new Promise(function(resolve) {
+        var timer = setTimeout(function() {
+          resolve({ error: 'Timeout (' + timeoutMs + 'ms)' });
+        }, timeoutMs);
         chrome.runtime.sendMessage(msg, function(response) {
+          clearTimeout(timer);
           resolve(response || { error: 'No response' });
         });
       });
