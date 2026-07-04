@@ -251,9 +251,6 @@
     },
   };
 
-  // ============================================================
-  // CAPTION FETCHER
-  // ============================================================
   const CaptionFetcher = {
     getVideoId() {
       try { return new URL(window.location.href).searchParams.get('v') || ''; }
