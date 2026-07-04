@@ -221,6 +221,39 @@
   /**
    * Caption fetcher via background service worker (no CSP/CORS issues)
    */
+  // ============================================================
+  // SETTINGS MANAGEMENT
+  // ============================================================
+  const SettingsManager = {
+    async load() {
+      return new Promise(function(resolve) {
+        chrome.storage.sync.get('dualsubSettings', function(result) {
+          if (result.dualsubSettings) {
+            STATE.settings = Object.assign({}, STATE.settings, result.dualsubSettings);
+          }
+          resolve(STATE.settings);
+        });
+      });
+    },
+    async save(settings) {
+      Object.assign(STATE.settings, settings);
+      return new Promise(function(resolve) {
+        chrome.storage.sync.set({ dualsubSettings: STATE.settings }, resolve);
+      });
+    },
+    async setLanguagePair(primaryLang, secondaryLang, primaryLabel, secondaryLabel) {
+      STATE.settings.primaryLang = primaryLang;
+      STATE.settings.secondaryLang = secondaryLang;
+      STATE.settings.primaryLabel = primaryLabel || primaryLang;
+      STATE.settings.secondaryLabel = secondaryLabel || secondaryLang;
+      await this.save({});
+      await CaptionManager.init();
+    },
+  };
+
+  // ============================================================
+  // CAPTION FETCHER
+  // ============================================================
   const CaptionFetcher = {
     getVideoId() {
       try { return new URL(window.location.href).searchParams.get('v') || ''; }
