@@ -9,14 +9,10 @@
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "https://www.youtube.com/*",
-    "https://youtube.com/*",
-    "https://www.coursera.org/*",
-    "https://coursera.org/*",
-    "https://www.edx.org/*",
-    "https://edx.org/*",
-    "https://www.udemy.com/*",
-    "https://udemy.com/*",
+    "https://*.youtube.com/*",
+    "https://*.coursera.org/*",
+    "https://*.edx.org/*",
+    "https://*.udemy.com/*",
     "https://api.dictionaryapi.dev/*"
   ],
   "action": {
@@ -62,7 +58,7 @@
   },
   "web_accessible_resources": [{
     "resources": ["content/*", "icons/*"],
-    "matches": ["https://www.youtube.com/*", "https://youtube.com/*", "https://www.coursera.org/*", "https://coursera.org/*", "https://www.edx.org/*", "https://edx.org/*", "https://www.udemy.com/*", "https://udemy.com/*"]
+    "matches": ["https://*.youtube.com/*", "https://*.coursera.org/*", "https://*.edx.org/*", "https://*.udemy.com/*"]
   }],
   "icons": {
     "16": "icons/icon16.png",
