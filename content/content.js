@@ -253,37 +253,66 @@
 
   const CaptionFetcher = {
     getVideoId() {
-      try { return new URL(window.location.href).searchParams.get('v') || ''; }
-      catch (e) { return ''; }
+      try { return new URL(window.location.href).searchParams.get("v") || ""; }
+      catch (e) { return ""; }
     },
-
-    _bgMessage(msg, timeoutMs) {
-      if (timeoutMs === undefined) timeoutMs = 15000;
-      return new Promise(function(resolve) {
-        var timer = setTimeout(function() {
-          resolve({ error: 'Timeout (' + timeoutMs + 'ms)' });
-        }, timeoutMs);
-        chrome.runtime.sendMessage(msg, function(response) {
-          clearTimeout(timer);
-          resolve(response || { error: 'No response' });
-        });
-      });
-    },
-
     async fetchForLanguage(langCode) {
       var videoId = this.getVideoId();
       if (!videoId) return [];
-      var result = await this._bgMessage({
-        type: 'fetchCaptions',
-        videoId: videoId,
-        langCode: langCode,
-      });
-      if (result && result.cues && result.cues.length > 0) {
-        console.log('[DualSub] Got ' + result.cues.length + ' cues for ' + langCode);
-        return result.cues;
-      }
-      console.warn('[DualSub] No captions for ' + langCode + ': ' + (result && result.error ? result.error : 'unknown'));
+      try {
+        var pageResp = await fetch("https://www.youtube.com/watch?v=" + videoId, { credentials: "include" });
+        if (!pageResp.ok) { console.warn("[DualSub] Page fetch: HTTP " + pageResp.status); return []; }
+        var html = await pageResp.text();
+        var data = this._extractPlayerResponse(html);
+        if (!data) { console.warn("[DualSub] No player response"); return []; }
+        var tracks = this._extractTracks(data);
+        if (!tracks || !tracks.length) { console.warn("[DualSub] No tracks"); return []; }
+        var track = tracks.find(function(t) { return t.lang === langCode; });
+        if (!track && langCode === "vi") track = tracks.find(function(t) { return t.lang.indexOf("vi") === 0; });
+        if (!track && langCode === "en") track = tracks.find(function(t) { return t.lang.indexOf("en") === 0; });
+        if (!track) track = tracks.find(function(t) { return t.lang.indexOf(langCode) >= 0; });
+        if (!track) track = tracks[0];
+        if (!track) return [];
+        var cues = await this._fetchCues(track.url);
+        if (cues && cues.length > 0) { console.log("[DualSub] Got " + cues.length + " cues for " + langCode); return cues; }
+        if (track.lang !== langCode && track.translatable) {
+          cues = await this._fetchCues(track.url + "&tlang=" + langCode);
+          if (cues && cues.length > 0) { console.log("[DualSub] Got " + cues.length + " translated cues"); return cues; }
+        }
+      } catch(e) { console.warn("[DualSub] Error: " + e.message); }
       return [];
+    },
+
+    _extractPlayerResponse(html) {
+      var marker = 'ytInitialPlayerResponse = ';
+      var idx = html.indexOf(marker);
+      if (idx === -1) return null;
+      var braceIdx = html.indexOf('{', idx + marker.length);
+      if (braceIdx === -1) return null;
+      var depth = 0, endIdx = braceIdx;
+      var limit = Math.min(html.length, braceIdx + 500000);
+      for (var i = braceIdx; i < limit; i++) {
+        var ch = html[i];
+        if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) { endIdx = i + 1; break; } }
+        if (ch === '"' || ch === '`') { var q = ch; i++; while (i < limit && html[i] !== q) { if (html[i] === '\\') i++; i++; } }
+      }
+      if (depth !== 0) return null;
+      try { return JSON.parse(html.slice(braceIdx, endIdx)); } catch(e) { return null; }
+    },
+
+    _extractTracks(data) {
+      try {
+        var tr = data.captions && data.captions.playerCaptionsTracklistRenderer && data.captions.playerCaptionsTracklistRenderer.captionTracks;
+        if (!tr || !tr.length) return [];
+        return tr.map(function(t) { return { url: t.baseUrl, lang: t.languageCode, name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode, kind: t.kind || 'standard', translatable: t.isTranslatable || false }; });
+      } catch(e) { return []; }
+    },
+
+    async _fetchCues(baseUrl) {
+      var resp = await fetch(baseUrl + '&fmt=vtt', { credentials: 'include', headers: { 'Accept': 'text/plain, */*' } });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return SubtitleParser.parse(await resp.text());
     },
   };
 
