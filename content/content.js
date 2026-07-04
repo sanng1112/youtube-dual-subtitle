@@ -37,6 +37,9 @@
     retryCount: 0,
     lastVideoId: null,
     resizeObserver: null,
+    scrollObserver: null,
+    scrollListener: null,
+    _retryTimers: [],
   };
 
   // ============================================================
@@ -215,11 +218,38 @@
         const text = script.textContent || '';
         if (text.includes('ytInitialPlayerResponse')) {
           try {
-            const m = text.match(/ytInitialPlayerResponse\s*=\s*({.*?});/);
-            if (m) return JSON.parse(m[1]);
-            const m2 = text.match(/window\.ytInitialPlayerResponse\s*=\s*({.*?});/);
-            if (m2) return JSON.parse(m2[1]);
-          } catch (e) { /* ignore */ }
+            // Extract JSON by counting braces (handles nested objects correctly)
+            const startIdx = text.indexOf('ytInitialPlayerResponse');
+            if (startIdx === -1) continue;
+            const eqIdx = text.indexOf('=', startIdx);
+            if (eqIdx === -1) continue;
+            const braceIdx = text.indexOf('{', eqIdx);
+            if (braceIdx === -1) continue;
+
+            let depth = 0;
+            let endIdx = braceIdx;
+            const maxLen = Math.min(text.length, braceIdx + 500000); // 500KB safety limit
+            for (let i = braceIdx; i < maxLen; i++) {
+              const ch = text[i];
+              if (ch === '{') depth++;
+              else if (ch === '}') {
+                depth--;
+                if (depth === 0) { endIdx = i + 1; break; }
+              }
+              // Skip strings to avoid counting braces inside strings
+              if (ch === '"') {
+                i++;
+                while (i < maxLen && text[i] !== '"') {
+                  if (text[i] === '\\') i++; // skip escaped char
+                  i++;
+                }
+              }
+            }
+            if (depth !== 0) continue; // malformed JSON
+
+            const jsonStr = text.slice(braceIdx, endIdx);
+            return JSON.parse(jsonStr);
+          } catch (e) { /* ignore parse errors */ }
         }
       }
       return null;
@@ -396,6 +426,25 @@
       observer.observe(STATE.video);
       STATE.resizeObserver = observer;
     },
+
+    /** Watch for scroll to update overlay position */
+    setupScrollListener() {
+      const handleScroll = Util.debounce(() => this.positionOverlay(), 100);
+      document.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+      STATE.scrollListener = handleScroll;
+    },
+
+    /** Clean up all observers */
+    destroy() {
+      this.stopLoop();
+      if (STATE.resizeObserver) {
+        STATE.resizeObserver.disconnect();
+        STATE.resizeObserver = null;
+      }
+      // Clear retry timers
+      STATE._retryTimers.forEach(clearTimeout);
+      STATE._retryTimers = [];
+    },
   };
 
 
@@ -493,12 +542,34 @@
     async loadSubtitles(tracks) {
       if (STATE.isFetching) return;
       STATE.isFetching = true;
+
+      // Snapshot current video ID to detect changes mid-fetch
+      const currentVideoId = YouTubeCaptions.getVideoId();
+
       try {
-        STATE.primarySubtitles = await this.fetchForLanguage(tracks, STATE.settings.primaryLang);
-        STATE.secondarySubtitles = await this.fetchForLanguage(tracks, STATE.settings.secondaryLang);
+        // Fetch both languages in PARALLEL
+        const [primary, secondary] = await Promise.all([
+          this.fetchForLanguage(tracks, STATE.settings.primaryLang),
+          this.fetchForLanguage(tracks, STATE.settings.secondaryLang),
+        ]);
+
+        // GUARD: if video changed during fetch, discard results
+        if (YouTubeCaptions.getVideoId() !== currentVideoId) {
+          console.log('[DualSub] Video changed during fetch, discarding stale subtitles');
+          return;
+        }
+
+        STATE.primarySubtitles = primary;
+        STATE.secondarySubtitles = secondary;
+
+        // Sort both arrays by start time for binary search to work
+        STATE.primarySubtitles.sort((a, b) => a.start - b.start);
+        STATE.secondarySubtitles.sort((a, b) => a.start - b.start);
+
         console.log(`[DualSub] Primary: ${STATE.primarySubtitles.length}, Secondary: ${STATE.secondarySubtitles.length}`);
         STATE.isReady = true;
         STATE.retryCount = 0;
+
         chrome.runtime.sendMessage({
           type: 'subtitlesLoaded',
           payload: {
@@ -512,7 +583,8 @@
         console.error('[DualSub] Failed to load subtitles:', err);
         if (STATE.retryCount < 3) {
           STATE.retryCount++;
-          setTimeout(() => this.loadSubtitles(tracks), 2000 * STATE.retryCount);
+          const retryDelay = 2000 * STATE.retryCount;
+          STATE._retryTimers.push(setTimeout(() => this.loadSubtitles(tracks), retryDelay));
         }
       } finally {
         STATE.isFetching = false;
@@ -603,6 +675,7 @@
       DualSubUI.getOverlay();
       DualSubUI.applySettings();
       DualSubUI.setupResizeObserver();
+      DualSubUI.setupScrollListener();
       await CaptionManager.init();
       DualSubUI.startLoop();
       MessageHandler.setup();
@@ -656,9 +729,7 @@
     Main.init();
   }
 
-  window.addEventListener('beforeunload', () => {
-    DualSubUI.stopLoop();
-    if (STATE.resizeObserver) STATE.resizeObserver.disconnect();
-  });
+  window.addEventListener('beforeunload', () => DualSubUI.destroy());
+  window.addEventListener('pagehide', () => DualSubUI.destroy());
 })();
 
