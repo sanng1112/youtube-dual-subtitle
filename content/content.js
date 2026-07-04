@@ -354,6 +354,164 @@
   // ============================================================
   // MESSAGE HANDLER
   // ============================================================
+  // ============================================================
+  // DUAL SUBTITLE UI
+  // ============================================================
+  const DualSubUI = {
+    getOverlay() {
+      if (STATE.overlay && document.body.contains(STATE.overlay)) return STATE.overlay;
+      var overlay = document.createElement('div');
+      overlay.id = 'dualsub-overlay';
+      overlay.className = 'dualsub-overlay';
+      overlay.innerHTML = [
+        '<div class="dualsub-container">',
+        '  <div class="dualsub-primary dualsub-cue"></div>',
+        '  <div class="dualsub-secondary dualsub-cue"></div>',
+        '</div>',
+        '<div class="dualsub-status">',
+        '  <span class="dualsub-status-text">DualSub</span>',
+        '</div>',
+      ].join('');
+      document.body.appendChild(overlay);
+      STATE.overlay = overlay;
+      return overlay;
+    },
+
+    positionOverlay() {
+      var overlay = STATE.overlay, video = STATE.video;
+      if (!overlay || !video) return;
+      var rect = video.getBoundingClientRect();
+      overlay.style.left = rect.left + 'px';
+      overlay.style.width = rect.width + 'px';
+      overlay.style.height = rect.height + 'px';
+      overlay.style.top = rect.top + 'px';
+      if (STATE.settings.position === 'top') {
+        overlay.style.justifyContent = 'flex-start';
+        overlay.style.paddingTop = '60px';
+      } else {
+        overlay.style.justifyContent = 'flex-end';
+        overlay.style.paddingBottom = '60px';
+      }
+    },
+
+    applySettings() {
+      var overlay = STATE.overlay;
+      if (!overlay) return;
+      var p = overlay.querySelector('.dualsub-primary');
+      var s = overlay.querySelector('.dualsub-secondary');
+      if (p) p.style.fontSize = STATE.settings.fontSize + 'px';
+      if (s) s.style.fontSize = Math.max(12, STATE.settings.fontSize - 2) + 'px';
+      this.positionOverlay();
+    },
+
+    findCueAtTime(cues, time) {
+      if (!cues || !cues.length) return null;
+      var t = time + STATE.settings.timingOffset;
+      var lo = 0, hi = cues.length - 1;
+      while (lo <= hi) {
+        var mid = (lo + hi) >>> 1;
+        var cue = cues[mid];
+        if (t >= cue.start && t < cue.end) return cue;
+        if (t < cue.start) hi = mid - 1;
+        else lo = mid + 1;
+      }
+      return null;
+    },
+
+    findNearestCue(cues, time, windowSize) {
+      if (!cues || !cues.length) return null;
+      if (windowSize === undefined) windowSize = 2.0;
+      var best = null, bestDist = Infinity;
+      for (var i = 0; i < cues.length; i++) {
+        var dist = Math.abs(time - cues[i].start);
+        if (dist < windowSize && dist < bestDist) { bestDist = dist; best = cues[i]; }
+      }
+      return best;
+    },
+
+    updateDisplay() {
+      var video = STATE.video;
+      if (!video || !STATE.settings.enabled) { this.hide(); return; }
+      var t = video.currentTime;
+      if (Math.abs(t - STATE.lastTime) < 0.05) return;
+      STATE.lastTime = t;
+
+      var p = this.findCueAtTime(STATE.primarySubtitles, t);
+      var s = this.findCueAtTime(STATE.secondarySubtitles, t);
+      if (p && !s) s = this.findNearestCue(STATE.secondarySubtitles, t, 2.0);
+      if (s && !p) p = this.findNearestCue(STATE.primarySubtitles, t, 2.0);
+      this.render(p, s);
+    },
+
+    render(primary, secondary) {
+      var overlay = STATE.overlay;
+      if (!overlay) return;
+      var pEl = overlay.querySelector('.dualsub-primary');
+      var sEl = overlay.querySelector('.dualsub-secondary');
+      if (!STATE.settings.enabled || (!primary && !secondary)) {
+        pEl.textContent = ''; sEl.textContent = '';
+        overlay.classList.remove('dualsub-active');
+        return;
+      }
+      overlay.classList.add('dualsub-active');
+
+      if (STATE.settings.highlightEnabled && window.__DualSub.Highlight) {
+        pEl.innerHTML = window.__DualSub.Highlight.highlightText(primary ? primary.text : '');
+        sEl.innerHTML = window.__DualSub.Highlight.highlightText(secondary ? secondary.text : '');
+      } else {
+        pEl.textContent = primary ? primary.text : '';
+        sEl.textContent = secondary ? secondary.text : '';
+      }
+      pEl.style.display = primary ? 'block' : 'none';
+      sEl.style.display = secondary ? 'block' : 'none';
+
+      if (window.__DualSub.Transcript) {
+        window.__DualSub.Transcript.sync(STATE.video ? STATE.video.currentTime : 0);
+      }
+    },
+
+    hide() {
+      if (!STATE.overlay) return;
+      STATE.overlay.classList.remove('dualsub-active');
+      var p = STATE.overlay.querySelector('.dualsub-primary');
+      var s = STATE.overlay.querySelector('.dualsub-secondary');
+      if (p) p.textContent = '';
+      if (s) s.textContent = '';
+    },
+
+    startLoop() {
+      if (STATE.animationId) return;
+      var _this = this;
+      function loop() { _this.updateDisplay(); STATE.animationId = requestAnimationFrame(loop); }
+      STATE.animationId = requestAnimationFrame(loop);
+    },
+
+    stopLoop() {
+      if (STATE.animationId) { cancelAnimationFrame(STATE.animationId); STATE.animationId = null; }
+    },
+
+    setupResizeObserver() {
+      if (!STATE.video) return;
+      var observer = new ResizeObserver(function() { DualSubUI.positionOverlay(); });
+      observer.observe(STATE.video);
+      STATE.resizeObserver = observer;
+    },
+
+    setupScrollListener() {
+      function handleScroll() { DualSubUI.positionOverlay(); }
+      document.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+      STATE.scrollListener = handleScroll;
+    },
+
+    destroy() {
+      this.stopLoop();
+      if (STATE.resizeObserver) { STATE.resizeObserver.disconnect(); STATE.resizeObserver = null; }
+      STATE._retryTimers.forEach(clearTimeout);
+      STATE._retryTimers = [];
+    },
+  };
+
+
   const MessageHandler = {
     setup() {
       chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
