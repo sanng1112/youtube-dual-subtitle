@@ -307,11 +307,39 @@
     async detectTracks() {
       var videoId = this.getVideoId();
       if (!videoId) return [];
+
+      // Priority 1: YouTube timedtext API
       var tracks = await this.fetchCaptionList(videoId);
       if (tracks.length > 0) return tracks;
+
+      // Priority 2: ytInitialPlayerResponse from page
       var pr = this._extractFromPage();
       if (pr) { tracks = this.getCaptionTracks(pr); if (tracks.length > 0) return tracks; }
+
+      // Priority 3: youtubetranscript.com (third-party fallback)
+      tracks = await this._fetchFromYouTubeTranscript(videoId);
+      if (tracks.length > 0) return tracks;
+
       return [];
+    },
+
+    /** Fallback: use youtubetranscript.com API */
+    async _fetchFromYouTubeTranscript(videoId) {
+      try {
+        var resp = await fetch('https://youtubetranscript.com/?v=' + videoId);
+        if (!resp.ok) return [];
+        var data = await resp.json();
+        if (!data || !Array.isArray(data)) return [];
+        // Return as a single 'en' track with direct transcription
+        return [{
+          baseUrl: 'https://youtubetranscript.com/?v=' + videoId + '&format=json',
+          languageCode: 'en',
+          name: 'English (auto)',
+          kind: 'asr',
+          isTranslatable: false,
+          _transcriptData: data,
+        }];
+      } catch(e) { return []; }
     },
 
     /** Fetch subtitles for a language with translation fallback */
@@ -323,6 +351,13 @@
       if (!track) track = tracks.find(function(t) { return t.languageCode.indexOf(langCode) >= 0; });
       if (!track) track = tracks[0];
       if (!track) return [];
+
+      // Special handling for youtubetranscript.com data
+      if (track._transcriptData) {
+        return this._parseTranscriptData(track._transcriptData);
+      }
+
+      // Standard YouTube timedtext / baseUrl
       try {
         var cues = await this.fetchSubtitles(track.baseUrl, langCode);
         if (cues.length > 0) return cues;
@@ -337,6 +372,18 @@
         }
       }
       return [];
+    },
+
+    /** Parse youtubetranscript.com JSON format into {start, end, text}[] */
+    _parseTranscriptData(data) {
+      if (!data || !Array.isArray(data)) return [];
+      return data.map(function(item) {
+        return {
+          start: parseFloat(item.start) || 0,
+          end: (parseFloat(item.start) || 0) + (parseFloat(item.duration) || 2),
+          text: (item.text || '').trim(),
+        };
+      }).filter(function(cue) { return cue.text; });
     },
   };
 
