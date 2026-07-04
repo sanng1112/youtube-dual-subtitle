@@ -438,15 +438,18 @@
         window.__DualSub.Highlight.setLevel(STATE.settings.highlightLevel);
       }
 
+      MessageHandler.setup(); // MUST be before caption loading
       await this.waitForVideo();
       DualSubUI.getOverlay();
       DualSubUI.applySettings();
       DualSubUI.setupResizeObserver();
       DualSubUI.setupScrollListener();
-      await CaptionManager.init();
       DualSubUI.startLoop();
-      MessageHandler.setup();
       this.setupYouTubeNavigationDetection();
+      // Load captions (async, doesn't block UI)
+      CaptionManager.init().catch(function(err) {
+        console.warn('[DualSub] Caption loading deferred:', err);
+      });
 
       // Show transcript if was visible
       if (STATE.settings.transcriptVisible && window.__DualSub.Transcript) {
