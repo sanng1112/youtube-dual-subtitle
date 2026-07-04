@@ -219,78 +219,124 @@
   // YOUTUBE CAPTION EXTRACTOR
   // ============================================================
   const YouTubeCaptions = {
-    getPlayerResponse() {
-      if (typeof ytInitialPlayerResponse !== 'undefined') return ytInitialPlayerResponse;
-      const scripts = document.querySelectorAll('script');
-      for (const script of scripts) {
-        const text = script.textContent || '';
-        if (text.includes('ytInitialPlayerResponse')) {
-          try {
-            // Extract JSON by counting braces (handles nested objects correctly)
-            const startIdx = text.indexOf('ytInitialPlayerResponse');
-            if (startIdx === -1) continue;
-            const eqIdx = text.indexOf('=', startIdx);
-            if (eqIdx === -1) continue;
-            const braceIdx = text.indexOf('{', eqIdx);
-            if (braceIdx === -1) continue;
+    getVideoId() {
+      try { return new URL(window.location.href).searchParams.get('v') || ''; }
+      catch (e) { return ''; }
+    },
 
-            let depth = 0;
-            let endIdx = braceIdx;
-            const maxLen = Math.min(text.length, braceIdx + 500000); // 500KB safety limit
-            for (let i = braceIdx; i < maxLen; i++) {
-              const ch = text[i];
-              if (ch === '{') depth++;
-              else if (ch === '}') {
-                depth--;
-                if (depth === 0) { endIdx = i + 1; break; }
-              }
-              // Skip strings to avoid counting braces inside strings
-              if (ch === '"') {
+    /** Fetch caption list via YouTube timedtext API (most reliable) */
+    async fetchCaptionList(videoId) {
+      if (!videoId) return [];
+      try {
+        var url = 'https://www.youtube.com/api/timedtext?v=' + videoId + '&type=list';
+        var resp = await fetch(url, { credentials: 'include' });
+        if (!resp.ok) return [];
+        var doc = new DOMParser().parseFromString(await resp.text(), 'text/xml');
+        var trackEls = doc.querySelectorAll('track');
+        var result = [];
+        for (var i = 0; i < trackEls.length; i++) {
+          var langCode = trackEls[i].getAttribute('lang_code') || trackEls[i].getAttribute('lang_original');
+          var langName = trackEls[i].getAttribute('name') || langCode;
+          if (langCode) {
+            result.push({
+              baseUrl: 'https://www.youtube.com/api/timedtext?v=' + videoId + '&lang=' + langCode,
+              languageCode: langCode, name: langName, isTranslatable: true,
+            });
+          }
+        }
+        return result;
+      } catch (e) { return []; }
+    },
+
+    /** Parse ytInitialPlayerResponse from script tags (fallback) */
+    _extractFromPage() {
+      var scripts = document.querySelectorAll('script');
+      for (var s = 0; s < scripts.length; s++) {
+        var text = scripts[s].textContent || '';
+        if (text.indexOf('ytInitialPlayerResponse') === -1) continue;
+        try {
+          var idx = text.indexOf('ytInitialPlayerResponse');
+          var eqIdx = text.indexOf('=', idx);
+          if (eqIdx === -1) continue;
+          var braceIdx = text.indexOf('{', eqIdx);
+          if (braceIdx === -1) continue;
+          var depth = 0, endIdx = braceIdx;
+          var maxLen = Math.min(text.length, braceIdx + 1000000);
+          for (var i = braceIdx; i < maxLen; i++) {
+            var ch = text[i];
+            if (ch === '{') depth++;
+            else if (ch === '}') { depth--; if (depth === 0) { endIdx = i + 1; break; } }
+            if (ch === '"' || ch === '`') {
+              var quote = ch; i++;
+              while (i < maxLen && text[i] !== quote) {
+                if (text[i] === '\\') i++;
                 i++;
-                while (i < maxLen && text[i] !== '"') {
-                  if (text[i] === '\\') i++; // skip escaped char
-                  i++;
-                }
               }
             }
-            if (depth !== 0) continue; // malformed JSON
-
-            const jsonStr = text.slice(braceIdx, endIdx);
-            return JSON.parse(jsonStr);
-          } catch (e) { /* ignore parse errors */ }
-        }
+          }
+          if (depth !== 0) continue;
+          return JSON.parse(text.slice(braceIdx, endIdx));
+        } catch(e) { continue; }
       }
       return null;
     },
 
     getCaptionTracks(playerResponse) {
       try {
-        const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        if (tracks && tracks.length > 0) {
-          return tracks.map((t) => ({
-            baseUrl: t.baseUrl,
-            languageCode: t.languageCode,
-            name: t.name?.simpleText || t.name?.runs?.[0]?.text || t.languageCode,
-            kind: t.kind || 'standard',
-            isTranslatable: t.isTranslatable || false,
-            vssId: t.vssId,
-          }));
+        var tr = playerResponse && playerResponse.captions && playerResponse.captions.playerCaptionsTracklistRenderer && playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+        if (tr && tr.length > 0) {
+          return tr.map(function(t) {
+            return {
+              baseUrl: t.baseUrl, languageCode: t.languageCode,
+              name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode,
+              kind: t.kind || 'standard', isTranslatable: t.isTranslatable || false,
+            };
+          });
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) {}
       return [];
     },
 
-    async fetchSubtitles(baseUrl, languageCode) {
-      const url = `${baseUrl}&fmt=vtt`;
-      const resp = await fetch(url, { credentials: 'include', headers: { Accept: 'text/plain, */*' } });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${languageCode}`);
-      const text = await resp.text();
-      return SubtitleParser.parse(text);
+    async fetchSubtitles(baseUrl, lang) {
+      var resp = await fetch(baseUrl + '&fmt=vtt', { credentials: 'include', headers: { Accept: 'text/plain, */*' } });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return SubtitleParser.parse(await resp.text());
     },
 
-    getVideoId() {
-      const url = new URL(window.location.href);
-      return url.searchParams.get('v');
+    /** Detect available caption tracks */
+    async detectTracks() {
+      var videoId = this.getVideoId();
+      if (!videoId) return [];
+      var tracks = await this.fetchCaptionList(videoId);
+      if (tracks.length > 0) return tracks;
+      var pr = this._extractFromPage();
+      if (pr) { tracks = this.getCaptionTracks(pr); if (tracks.length > 0) return tracks; }
+      return [];
+    },
+
+    /** Fetch subtitles for a language with translation fallback */
+    async fetchWithTranslation(tracks, langCode) {
+      if (!tracks || !tracks.length) return [];
+      var track = tracks.find(function(t) { return t.languageCode === langCode; });
+      if (!track && langCode === 'vi') track = tracks.find(function(t) { return t.languageCode.indexOf('vi') === 0; });
+      if (!track && langCode === 'en') track = tracks.find(function(t) { return t.languageCode.indexOf('en') === 0; });
+      if (!track) track = tracks.find(function(t) { return t.languageCode.indexOf(langCode) >= 0; });
+      if (!track) track = tracks[0];
+      if (!track) return [];
+      try {
+        var cues = await this.fetchSubtitles(track.baseUrl, langCode);
+        if (cues.length > 0) return cues;
+        if (track.languageCode !== langCode && track.isTranslatable) {
+          cues = await this.fetchSubtitles(track.baseUrl + '&tlang=' + langCode, track.languageCode + '->' + langCode);
+          if (cues.length > 0) return cues;
+        }
+      } catch (err) {
+        if (track.isTranslatable) {
+          try { return await this.fetchSubtitles(track.baseUrl + '&tlang=' + langCode, track.languageCode + '->' + langCode); }
+          catch (e2) {}
+        }
+      }
+      return [];
     },
   };
 
@@ -506,7 +552,7 @@
   // ============================================================
   const CaptionManager = {
     hasVideoChanged() {
-      const videoId = YouTubeCaptions.getVideoId();
+      var videoId = YouTubeCaptions.getVideoId();
       if (videoId !== STATE.lastVideoId) {
         STATE.lastVideoId = videoId;
         STATE.primarySubtitles = [];
@@ -518,78 +564,41 @@
       return false;
     },
 
-    extractTracks() {
-      const pr = YouTubeCaptions.getPlayerResponse();
-      if (!pr) return [];
-      const tracks = YouTubeCaptions.getCaptionTracks(pr);
+    /** Phát hiện tracks mới */
+    async detectTracks() {
+      var tracks = await YouTubeCaptions.detectTracks();
       STATE.availableTracks = tracks;
       return tracks;
-    },
-
-    findTrack(tracks, langCode) {
-      if (!tracks || tracks.length === 0) return null;
-      let exact = tracks.find((t) => t.languageCode === langCode);
-      if (exact) return exact;
-      if (langCode === 'vi') {
-        const vi = tracks.find((t) => t.languageCode.startsWith('vi'));
-        if (vi) return vi;
-      }
-      if (langCode === 'en') {
-        const en = tracks.find((t) => t.languageCode.startsWith('en'));
-        if (en) return en;
-      }
-      const fuzzy = tracks.find((t) => t.languageCode.includes(langCode));
-      return fuzzy || tracks[0];
-    },
-
-    async fetchForLanguage(tracks, langCode) {
-      const track = this.findTrack(tracks, langCode);
-      if (!track) return [];
-      try {
-        const cues = await YouTubeCaptions.fetchSubtitles(track.baseUrl, langCode);
-        if (cues.length > 0) return cues;
-        if (track.languageCode !== langCode && track.isTranslatable) {
-          const tc = await YouTubeCaptions.fetchSubtitles(`${track.baseUrl}&tlang=${langCode}`, `${track.languageCode}->${langCode}`);
-          if (tc.length > 0) return tc;
-        }
-      } catch (err) {
-        if (track.isTranslatable) {
-          try {
-            return await YouTubeCaptions.fetchSubtitles(`${track.baseUrl}&tlang=${langCode}`, `${track.languageCode}->${langCode}`);
-          } catch (e2) { /* ignore */ }
-        }
-      }
-      return [];
     },
 
     async loadSubtitles(tracks) {
       if (STATE.isFetching) return;
       STATE.isFetching = true;
 
-      // Snapshot current video ID to detect changes mid-fetch
-      const currentVideoId = YouTubeCaptions.getVideoId();
+      // Snapshot current video ID
+      var currentVideoId = YouTubeCaptions.getVideoId();
 
       try {
         // Fetch both languages in PARALLEL
-        const [primary, secondary] = await Promise.all([
-          this.fetchForLanguage(tracks, STATE.settings.primaryLang),
-          this.fetchForLanguage(tracks, STATE.settings.secondaryLang),
+        var results = await Promise.all([
+          YouTubeCaptions.fetchWithTranslation(tracks, STATE.settings.primaryLang),
+          YouTubeCaptions.fetchWithTranslation(tracks, STATE.settings.secondaryLang),
         ]);
 
         // GUARD: if video changed during fetch, discard results
         if (YouTubeCaptions.getVideoId() !== currentVideoId) {
-          console.log('[DualSub] Video changed during fetch, discarding stale subtitles');
+          console.log('[DualSub] Video changed, discarding stale subtitles');
           return;
         }
 
-        STATE.primarySubtitles = primary;
-        STATE.secondarySubtitles = secondary;
+        STATE.primarySubtitles = results[0];
+        STATE.secondarySubtitles = results[1];
 
-        // Sort both arrays by start time for binary search to work
-        STATE.primarySubtitles.sort((a, b) => a.start - b.start);
-        STATE.secondarySubtitles.sort((a, b) => a.start - b.start);
+        // Sort by start time for binary search
+        STATE.primarySubtitles.sort(function(a, b) { return a.start - b.start; });
+        STATE.secondarySubtitles.sort(function(a, b) { return a.start - b.start; });
 
-        console.log(`[DualSub] Primary: ${STATE.primarySubtitles.length}, Secondary: ${STATE.secondarySubtitles.length}`);
+        console.log('[DualSub] Primary: ' + STATE.primarySubtitles.length + ', Secondary: ' + STATE.secondarySubtitles.length);
         STATE.isReady = true;
         STATE.retryCount = 0;
 
@@ -606,8 +615,7 @@
         console.error('[DualSub] Failed to load subtitles:', err);
         if (STATE.retryCount < 3) {
           STATE.retryCount++;
-          const retryDelay = 2000 * STATE.retryCount;
-          STATE._retryTimers.push(setTimeout(() => this.loadSubtitles(tracks), retryDelay));
+          STATE._retryTimers.push(setTimeout(() => this.loadSubtitles(tracks), 2000 * STATE.retryCount));
         }
       } finally {
         STATE.isFetching = false;
@@ -616,7 +624,7 @@
 
     async init() {
       if (this.hasVideoChanged() || STATE.availableTracks.length === 0) {
-        const tracks = this.extractTracks();
+        var tracks = await this.detectTracks();
         if (tracks.length > 0) { await this.loadSubtitles(tracks); return true; }
         return false;
       }

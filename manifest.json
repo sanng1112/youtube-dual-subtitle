@@ -13,7 +13,8 @@
     "https://*.coursera.org/*",
     "https://*.edx.org/*",
     "https://*.udemy.com/*",
-    "https://api.dictionaryapi.dev/*"
+    "https://api.dictionaryapi.dev/*",
+    "https://youtubetranscript.com/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
