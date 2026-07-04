@@ -248,36 +248,83 @@
       } catch (e) { return []; }
     },
 
-    /** Parse ytInitialPlayerResponse from script tags (fallback) */
-    _extractFromPage() {
-      var scripts = document.querySelectorAll('script');
-      for (var s = 0; s < scripts.length; s++) {
-        var text = scripts[s].textContent || '';
-        if (text.indexOf('ytInitialPlayerResponse') === -1) continue;
-        try {
-          var idx = text.indexOf('ytInitialPlayerResponse');
-          var eqIdx = text.indexOf('=', idx);
-          if (eqIdx === -1) continue;
-          var braceIdx = text.indexOf('{', eqIdx);
-          if (braceIdx === -1) continue;
-          var depth = 0, endIdx = braceIdx;
-          var maxLen = Math.min(text.length, braceIdx + 1000000);
-          for (var i = braceIdx; i < maxLen; i++) {
-            var ch = text[i];
-            if (ch === '{') depth++;
-            else if (ch === '}') { depth--; if (depth === 0) { endIdx = i + 1; break; } }
-            if (ch === '"' || ch === '`') {
-              var quote = ch; i++;
-              while (i < maxLen && text[i] !== quote) {
-                if (text[i] === '\\') i++;
-                i++;
-              }
-            }
+    /** 
+     * Inject script into page's main world to access ytInitialPlayerResponse
+     * Content script (isolated world) cannot access page JS variables directly
+     */
+    _injectScript() {
+      return new Promise(function(resolve) {
+        // Create a unique ID for communication
+        var msgId = '_dualsub_pr_' + Date.now();
+        
+        // Create a script element that runs in the page's main world
+        var script = document.createElement('script');
+        script.textContent = [
+          '(function() {',
+          '  try {',
+          '    var data = typeof ytInitialPlayerResponse !== "undefined" ? ytInitialPlayerResponse : null;',
+          '    if (!data) data = typeof window.ytInitialPlayerResponse !== "undefined" ? window.ytInitialPlayerResponse : null;',
+          '    var el = document.getElementById("' + msgId + '");',
+          '    if (el && data) {',
+          '      el.textContent = JSON.stringify(data);',
+          '      el.dispatchEvent(new Event("dualsub_data"));',
+          '    }',
+          '  } catch(e) {}',
+          '})();'
+        ].join('\n');
+        
+        // Create a hidden div to receive data
+        var receiver = document.createElement('div');
+        receiver.id = msgId;
+        receiver.style.display = 'none';
+        document.body.appendChild(receiver);
+        
+        // Listen for the event
+        var timeout = setTimeout(function() {
+          cleanup();
+          resolve(null);
+        }, 3000);
+        
+        function cleanup() {
+          clearTimeout(timeout);
+          if (script.parentNode) script.parentNode.removeChild(script);
+          if (receiver.parentNode) receiver.parentNode.removeChild(receiver);
+        }
+        
+        receiver.addEventListener('dualsub_data', function() {
+          try {
+            var data = JSON.parse(receiver.textContent);
+            cleanup();
+            resolve(data);
+          } catch(e) {
+            cleanup();
+            resolve(null);
           }
-          if (depth !== 0) continue;
-          return JSON.parse(text.slice(braceIdx, endIdx));
-        } catch(e) { continue; }
-      }
+        });
+        
+        // Inject the script
+        document.documentElement.appendChild(script);
+        if (script.parentNode) script.parentNode.removeChild(script);
+      });
+    },
+
+    /** Extract captions from injected player response */
+    _extractFromInjected(playerResponse) {
+      if (!playerResponse) return null;
+      try {
+        var tracks = playerResponse.captions && playerResponse.captions.playerCaptionsTracklistRenderer && playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+        if (tracks && tracks.length > 0) {
+          return tracks.map(function(t) {
+            return {
+              baseUrl: t.baseUrl,
+              languageCode: t.languageCode,
+              name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode,
+              kind: t.kind || 'standard',
+              isTranslatable: t.isTranslatable || false,
+            };
+          });
+        }
+      } catch(e) {}
       return null;
     },
 
@@ -312,11 +359,19 @@
       var tracks = await this.fetchCaptionList(videoId);
       if (tracks.length > 0) return tracks;
 
-      // Priority 2: ytInitialPlayerResponse from page
-      var pr = this._extractFromPage();
-      if (pr) { tracks = this.getCaptionTracks(pr); if (tracks.length > 0) return tracks; }
+      // Priority 2: ytInitialPlayerResponse via injected script
+      console.log('[DualSub] Trying injected script...');
+      var pr = await this._injectScript();
+      if (pr) {
+        tracks = this._extractFromInjected(pr);
+        if (tracks && tracks.length > 0) {
+          console.log('[DualSub] Found ' + tracks.length + ' tracks via injected script');
+          return tracks;
+        }
+      }
 
       // Priority 3: youtubetranscript.com (third-party fallback)
+      console.log('[DualSub] Trying youtubetranscript.com...');
       tracks = await this._fetchFromYouTubeTranscript(videoId);
       if (tracks.length > 0) return tracks;
 
