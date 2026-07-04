@@ -224,12 +224,13 @@
       catch (e) { return ''; }
     },
 
-    /** Fetch caption list via YouTube timedtext API (most reliable) */
+    /** Fetch caption list via YouTube timedtext API (same-origin, no CORS needed) */
     async fetchCaptionList(videoId) {
       if (!videoId) return [];
       try {
-        var url = 'https://www.youtube.com/api/timedtext?v=' + videoId + '&type=list';
-        var resp = await fetch(url, { credentials: 'include' });
+        var resp = await fetch('https://www.youtube.com/api/timedtext?v=' + videoId + '&type=list', {
+          credentials: 'include'
+        });
         if (!resp.ok) return [];
         var doc = new DOMParser().parseFromString(await resp.text(), 'text/xml');
         var trackEls = doc.querySelectorAll('track');
@@ -248,63 +249,72 @@
       } catch (e) { return []; }
     },
 
-    /** 
-     * Inject script into page's main world to access ytInitialPlayerResponse
-     * Content script (isolated world) cannot access page JS variables directly
+    /**
+     * Proxy fetch through background service worker (bypasses CORS/CSP)
      */
-    _injectScript() {
+    _proxyFetch(url, opts) {
       return new Promise(function(resolve) {
-        // Create a unique ID for communication
+        chrome.runtime.sendMessage({
+          type: 'proxyFetch',
+          url: url,
+          includeCredentials: opts && opts.credentials === 'include',
+          headers: opts && opts.headers,
+        }, function(response) {
+          resolve(response || { ok: false, error: 'No response' });
+        });
+      });
+    },
+
+    /** 
+     * Use page-bridge.js (loaded via chrome-extension:// URL) to access page JS variables
+     * This bypasses CSP because chrome-extension:// origin is allowed
+     */
+    _injectBridge() {
+      var _this = this;
+      return new Promise(function(resolve) {
         var msgId = '_dualsub_pr_' + Date.now();
+        var bridgeUrl = chrome.runtime.getURL('content/page-bridge.js');
         
-        // Create a script element that runs in the page's main world
-        var script = document.createElement('script');
-        script.textContent = [
-          '(function() {',
-          '  try {',
-          '    var data = typeof ytInitialPlayerResponse !== "undefined" ? ytInitialPlayerResponse : null;',
-          '    if (!data) data = typeof window.ytInitialPlayerResponse !== "undefined" ? window.ytInitialPlayerResponse : null;',
-          '    var el = document.getElementById("' + msgId + '");',
-          '    if (el && data) {',
-          '      el.textContent = JSON.stringify(data);',
-          '      el.dispatchEvent(new Event("dualsub_data"));',
-          '    }',
-          '  } catch(e) {}',
-          '})();'
-        ].join('\n');
-        
-        // Create a hidden div to receive data
+        // Create receiver
         var receiver = document.createElement('div');
         receiver.id = msgId;
         receiver.style.display = 'none';
         document.body.appendChild(receiver);
         
-        // Listen for the event
-        var timeout = setTimeout(function() {
-          cleanup();
-          resolve(null);
-        }, 3000);
+        // Timeout
+        var timeout = setTimeout(function() { cleanup(); resolve(null); }, 3000);
         
         function cleanup() {
           clearTimeout(timeout);
-          if (script.parentNode) script.parentNode.removeChild(script);
           if (receiver.parentNode) receiver.parentNode.removeChild(receiver);
         }
         
+        // Listen for data
         receiver.addEventListener('dualsub_data', function() {
           try {
-            var data = JSON.parse(receiver.textContent);
+            var payload = JSON.parse(receiver.textContent);
             cleanup();
-            resolve(data);
-          } catch(e) {
-            cleanup();
-            resolve(null);
-          }
+            resolve(payload && payload.data ? payload : null);
+          } catch(e) { cleanup(); resolve(null); }
         });
         
-        // Inject the script
+        // Inject page-bridge.js via <script src="chrome-extension://...">
+        // This is allowed by YouTube's CSP (chrome-extension:// origin is whitelisted)
+        var script = document.createElement('script');
+        script.src = bridgeUrl;
+        script.onload = function() {
+          if (script.parentNode) script.parentNode.removeChild(script);
+          // If bridge ran but didn't find data, resolve null after a short delay
+          setTimeout(function() {
+            if (receiver.parentNode) cleanup();
+          }, 500);
+        };
+        script.onerror = function() {
+          if (script.parentNode) script.parentNode.removeChild(script);
+          cleanup();
+          resolve(null);
+        };
         document.documentElement.appendChild(script);
-        if (script.parentNode) script.parentNode.removeChild(script);
       });
     },
 
@@ -359,9 +369,9 @@
       var tracks = await this.fetchCaptionList(videoId);
       if (tracks.length > 0) return tracks;
 
-      // Priority 2: ytInitialPlayerResponse via injected script
-      console.log('[DualSub] Trying injected script...');
-      var pr = await this._injectScript();
+      // Priority 2: ytInitialPlayerResponse via page-bridge
+      console.log('[DualSub] Trying page-bridge...');
+      var pr = await this._injectBridge();
       if (pr) {
         tracks = this._extractFromInjected(pr);
         if (tracks && tracks.length > 0) {
@@ -378,23 +388,36 @@
       return [];
     },
 
-    /** Fallback: use youtubetranscript.com API */
+    /** Fallback: use youtubetranscript.com API (via background proxy to bypass CORS) */
     async _fetchFromYouTubeTranscript(videoId) {
       try {
-        var resp = await fetch('https://youtubetranscript.com/?v=' + videoId);
-        if (!resp.ok) return [];
-        var data = await resp.json();
+        var result = await this._proxyFetch('https://youtubetranscript.com/?v=' + videoId);
+        if (!result || !result.ok || !result.text) return [];
+        var data = JSON.parse(result.text);
         if (!data || !Array.isArray(data)) return [];
-        // Return as a single 'en' track with direct transcription
         return [{
           baseUrl: 'https://youtubetranscript.com/?v=' + videoId + '&format=json',
-          languageCode: 'en',
-          name: 'English (auto)',
-          kind: 'asr',
-          isTranslatable: false,
-          _transcriptData: data,
+          languageCode: 'en', name: 'English (auto)', kind: 'asr',
+          isTranslatable: false, _transcriptData: data,
         }];
       } catch(e) { return []; }
+    },
+
+    /** Fetch subtitle content (same-origin for YouTube, proxy for external) */
+    async fetchSubtitles(baseUrl, lang) {
+      var url = baseUrl + '&fmt=vtt';
+      var resp;
+      if (baseUrl.indexOf('youtube.com') >= 0) {
+        // Same-origin request (YouTube API)
+        resp = await fetch(url, { credentials: 'include', headers: { Accept: 'text/plain, */*' } });
+      } else {
+        // Cross-origin request (use background proxy)
+        var proxyResult = await this._proxyFetch(url);
+        if (!proxyResult || !proxyResult.ok) throw new Error('HTTP ' + (proxyResult ? proxyResult.status : 'proxy error'));
+        return SubtitleParser.parse(proxyResult.text);
+      }
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return SubtitleParser.parse(await resp.text());
     },
 
     /** Fetch subtitles for a language with translation fallback */

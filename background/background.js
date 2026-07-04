@@ -34,7 +34,6 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 // Lắng nghe message từ popup hoặc content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // Relay messages nếu cần
   switch (request.type) {
     case 'openOptions':
       chrome.runtime.openOptionsPage();
@@ -44,14 +43,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       chrome.storage.sync.get(request.keys, (result) => {
         sendResponse(result);
       });
-      return true; // Keep channel open for async
+      return true;
     case 'setStorage':
       chrome.storage.sync.set(request.data, () => {
         sendResponse({ success: true });
       });
       return true;
+
+    // PROXY FETCH - bypass CORS/CSP by using background service worker
+    case 'proxyFetch':
+      (async () => {
+        try {
+          const resp = await fetch(request.url, {
+            credentials: request.includeCredentials ? 'include' : 'omit',
+            headers: request.headers || {},
+          });
+          const text = await resp.text();
+          sendResponse({ ok: resp.ok, status: resp.status, text: text });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+      })();
+      return true; // Keep channel open for async
+
     default:
-      // Forward to content script if needed
       break;
   }
   return false;

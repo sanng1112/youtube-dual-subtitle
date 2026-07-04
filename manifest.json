@@ -58,7 +58,7 @@
     "service_worker": "background/background.js"
   },
   "web_accessible_resources": [{
-    "resources": ["content/*", "icons/*"],
+    "resources": ["content/*", "icons/*", "background/*"],
     "matches": ["https://*.youtube.com/*", "https://*.coursera.org/*", "https://*.edx.org/*", "https://*.udemy.com/*"]
   }],
   "icons": {
