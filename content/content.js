@@ -218,457 +218,37 @@
   // ============================================================
   // YOUTUBE CAPTION EXTRACTOR
   // ============================================================
-  const YouTubeCaptions = {
+  /**
+   * Caption fetcher via background service worker (no CSP/CORS issues)
+   */
+  const CaptionFetcher = {
     getVideoId() {
       try { return new URL(window.location.href).searchParams.get('v') || ''; }
       catch (e) { return ''; }
     },
 
-    /** Fetch caption list via YouTube timedtext API (same-origin, no CORS needed) */
-    async fetchCaptionList(videoId) {
-      if (!videoId) return [];
-      try {
-        var resp = await fetch('https://www.youtube.com/api/timedtext?v=' + videoId + '&type=list', {
-          credentials: 'include'
-        });
-        if (!resp.ok) return [];
-        var doc = new DOMParser().parseFromString(await resp.text(), 'text/xml');
-        var trackEls = doc.querySelectorAll('track');
-        var result = [];
-        for (var i = 0; i < trackEls.length; i++) {
-          var langCode = trackEls[i].getAttribute('lang_code') || trackEls[i].getAttribute('lang_original');
-          var langName = trackEls[i].getAttribute('name') || langCode;
-          if (langCode) {
-            result.push({
-              baseUrl: 'https://www.youtube.com/api/timedtext?v=' + videoId + '&lang=' + langCode,
-              languageCode: langCode, name: langName, isTranslatable: true,
-            });
-          }
-        }
-        return result;
-      } catch (e) { return []; }
-    },
-
-    /**
-     * Proxy fetch through background service worker (bypasses CORS/CSP)
-     */
-    _proxyFetch(url, opts) {
+    _bgMessage(msg) {
       return new Promise(function(resolve) {
-        chrome.runtime.sendMessage({
-          type: 'proxyFetch',
-          url: url,
-          includeCredentials: opts && opts.credentials === 'include',
-          headers: opts && opts.headers,
-        }, function(response) {
-          resolve(response || { ok: false, error: 'No response' });
+        chrome.runtime.sendMessage(msg, function(response) {
+          resolve(response || { error: 'No response' });
         });
       });
     },
 
-    /** 
-     * Use page-bridge.js (loaded via chrome-extension:// URL) to access page JS variables
-     * This bypasses CSP because chrome-extension:// origin is allowed
-     */
-    _injectBridge() {
-      var _this = this;
-      return new Promise(function(resolve) {
-        var msgId = '_dualsub_pr_' + Date.now();
-        var bridgeUrl = chrome.runtime.getURL('content/page-bridge.js');
-        
-        // Create receiver
-        var receiver = document.createElement('div');
-        receiver.id = msgId;
-        receiver.style.display = 'none';
-        document.body.appendChild(receiver);
-        
-        // Timeout
-        var timeout = setTimeout(function() { cleanup(); resolve(null); }, 3000);
-        
-        function cleanup() {
-          clearTimeout(timeout);
-          if (receiver.parentNode) receiver.parentNode.removeChild(receiver);
-        }
-        
-        // Listen for data
-        receiver.addEventListener('dualsub_data', function() {
-          try {
-            var payload = JSON.parse(receiver.textContent);
-            cleanup();
-            resolve(payload && payload.data ? payload : null);
-          } catch(e) { cleanup(); resolve(null); }
-        });
-        
-        // Inject page-bridge.js via <script src="chrome-extension://...">
-        // This is allowed by YouTube's CSP (chrome-extension:// origin is whitelisted)
-        var script = document.createElement('script');
-        script.src = bridgeUrl;
-        script.onload = function() {
-          if (script.parentNode) script.parentNode.removeChild(script);
-          // If bridge ran but didn't find data, resolve null after a short delay
-          setTimeout(function() {
-            if (receiver.parentNode) cleanup();
-          }, 500);
-        };
-        script.onerror = function() {
-          if (script.parentNode) script.parentNode.removeChild(script);
-          cleanup();
-          resolve(null);
-        };
-        document.documentElement.appendChild(script);
-      });
-    },
-
-    /** Extract captions from injected player response */
-    _extractFromInjected(playerResponse) {
-      if (!playerResponse) return null;
-      try {
-        var tracks = playerResponse.captions && playerResponse.captions.playerCaptionsTracklistRenderer && playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
-        if (tracks && tracks.length > 0) {
-          return tracks.map(function(t) {
-            return {
-              baseUrl: t.baseUrl,
-              languageCode: t.languageCode,
-              name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode,
-              kind: t.kind || 'standard',
-              isTranslatable: t.isTranslatable || false,
-            };
-          });
-        }
-      } catch(e) {}
-      return null;
-    },
-
-    getCaptionTracks(playerResponse) {
-      try {
-        var tr = playerResponse && playerResponse.captions && playerResponse.captions.playerCaptionsTracklistRenderer && playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
-        if (tr && tr.length > 0) {
-          return tr.map(function(t) {
-            return {
-              baseUrl: t.baseUrl, languageCode: t.languageCode,
-              name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode,
-              kind: t.kind || 'standard', isTranslatable: t.isTranslatable || false,
-            };
-          });
-        }
-      } catch (e) {}
-      return [];
-    },
-
-    async fetchSubtitles(baseUrl, lang) {
-      var resp = await fetch(baseUrl + '&fmt=vtt', { credentials: 'include', headers: { Accept: 'text/plain, */*' } });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      return SubtitleParser.parse(await resp.text());
-    },
-
-    /** Detect available caption tracks */
-    async detectTracks() {
+    async fetchForLanguage(langCode) {
       var videoId = this.getVideoId();
       if (!videoId) return [];
-
-      // Priority 1: YouTube timedtext API
-      var tracks = await this.fetchCaptionList(videoId);
-      if (tracks.length > 0) return tracks;
-
-      // Priority 2: ytInitialPlayerResponse via page-bridge
-      console.log('[DualSub] Trying page-bridge...');
-      var pr = await this._injectBridge();
-      if (pr) {
-        tracks = this._extractFromInjected(pr);
-        if (tracks && tracks.length > 0) {
-          console.log('[DualSub] Found ' + tracks.length + ' tracks via injected script');
-          return tracks;
-        }
-      }
-
-      // Priority 3: youtubetranscript.com (third-party fallback)
-      console.log('[DualSub] Trying youtubetranscript.com...');
-      tracks = await this._fetchFromYouTubeTranscript(videoId);
-      if (tracks.length > 0) return tracks;
-
-      return [];
-    },
-
-    /** Fallback: use youtubetranscript.com API (via background proxy to bypass CORS) */
-    async _fetchFromYouTubeTranscript(videoId) {
-      try {
-        var result = await this._proxyFetch('https://youtubetranscript.com/?v=' + videoId);
-        if (!result || !result.ok || !result.text) return [];
-        var data = JSON.parse(result.text);
-        if (!data || !Array.isArray(data)) return [];
-        return [{
-          baseUrl: 'https://youtubetranscript.com/?v=' + videoId + '&format=json',
-          languageCode: 'en', name: 'English (auto)', kind: 'asr',
-          isTranslatable: false, _transcriptData: data,
-        }];
-      } catch(e) { return []; }
-    },
-
-    /** Fetch subtitle content (same-origin for YouTube, proxy for external) */
-    async fetchSubtitles(baseUrl, lang) {
-      var url = baseUrl + '&fmt=vtt';
-      var resp;
-      if (baseUrl.indexOf('youtube.com') >= 0) {
-        // Same-origin request (YouTube API)
-        resp = await fetch(url, { credentials: 'include', headers: { Accept: 'text/plain, */*' } });
-      } else {
-        // Cross-origin request (use background proxy)
-        var proxyResult = await this._proxyFetch(url);
-        if (!proxyResult || !proxyResult.ok) throw new Error('HTTP ' + (proxyResult ? proxyResult.status : 'proxy error'));
-        return SubtitleParser.parse(proxyResult.text);
-      }
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      return SubtitleParser.parse(await resp.text());
-    },
-
-    /** Fetch subtitles for a language with translation fallback */
-    async fetchWithTranslation(tracks, langCode) {
-      if (!tracks || !tracks.length) return [];
-      var track = tracks.find(function(t) { return t.languageCode === langCode; });
-      if (!track && langCode === 'vi') track = tracks.find(function(t) { return t.languageCode.indexOf('vi') === 0; });
-      if (!track && langCode === 'en') track = tracks.find(function(t) { return t.languageCode.indexOf('en') === 0; });
-      if (!track) track = tracks.find(function(t) { return t.languageCode.indexOf(langCode) >= 0; });
-      if (!track) track = tracks[0];
-      if (!track) return [];
-
-      // Special handling for youtubetranscript.com data
-      if (track._transcriptData) {
-        return this._parseTranscriptData(track._transcriptData);
-      }
-
-      // Standard YouTube timedtext / baseUrl
-      try {
-        var cues = await this.fetchSubtitles(track.baseUrl, langCode);
-        if (cues.length > 0) return cues;
-        if (track.languageCode !== langCode && track.isTranslatable) {
-          cues = await this.fetchSubtitles(track.baseUrl + '&tlang=' + langCode, track.languageCode + '->' + langCode);
-          if (cues.length > 0) return cues;
-        }
-      } catch (err) {
-        if (track.isTranslatable) {
-          try { return await this.fetchSubtitles(track.baseUrl + '&tlang=' + langCode, track.languageCode + '->' + langCode); }
-          catch (e2) {}
-        }
-      }
-      return [];
-    },
-
-    /** Parse youtubetranscript.com JSON format into {start, end, text}[] */
-    _parseTranscriptData(data) {
-      if (!data || !Array.isArray(data)) return [];
-      return data.map(function(item) {
-        return {
-          start: parseFloat(item.start) || 0,
-          end: (parseFloat(item.start) || 0) + (parseFloat(item.duration) || 2),
-          text: (item.text || '').trim(),
-        };
-      }).filter(function(cue) { return cue.text; });
-    },
-  };
-
-
-  // ============================================================
-  // DUAL SUBTITLE UI
-  // ============================================================
-  const DualSubUI = {
-    getOverlay() {
-      if (STATE.overlay && document.body.contains(STATE.overlay)) return STATE.overlay;
-      const overlay = document.createElement('div');
-      overlay.id = 'dualsub-overlay';
-      overlay.className = 'dualsub-overlay';
-      overlay.innerHTML = `
-        <div class="dualsub-container">
-          <div class="dualsub-primary dualsub-cue"></div>
-          <div class="dualsub-secondary dualsub-cue"></div>
-        </div>
-        <div class="dualsub-status">
-          <span class="dualsub-status-text">DualSub</span>
-        </div>
-      `;
-      document.body.appendChild(overlay);
-      STATE.overlay = overlay;
-      return overlay;
-    },
-
-    positionOverlay() {
-      const overlay = STATE.overlay;
-      const video = STATE.video;
-      if (!overlay || !video) return;
-      const rect = video.getBoundingClientRect();
-      overlay.style.left = rect.left + 'px';
-      overlay.style.width = rect.width + 'px';
-      overlay.style.height = rect.height + 'px';
-      overlay.style.top = rect.top + 'px';
-
-      if (STATE.settings.position === 'top') {
-        overlay.style.justifyContent = 'flex-start';
-        overlay.style.paddingTop = '60px';
-      } else {
-        overlay.style.justifyContent = 'flex-end';
-        overlay.style.paddingBottom = '60px';
-      }
-    },
-
-    applySettings() {
-      const overlay = STATE.overlay;
-      if (!overlay) return;
-      const primary = overlay.querySelector('.dualsub-primary');
-      const secondary = overlay.querySelector('.dualsub-secondary');
-      if (primary) {
-        primary.style.color = STATE.settings.primaryColor;
-        primary.style.fontSize = STATE.settings.fontSize + 'px';
-        primary.style.background = STATE.settings.backgroundColor;
-      }
-      if (secondary) {
-        secondary.style.color = STATE.settings.secondaryColor;
-        secondary.style.fontSize = Math.max(12, STATE.settings.fontSize - 2) + 'px';
-        secondary.style.background = STATE.settings.backgroundColor;
-      }
-      this.positionOverlay();
-    },
-
-    findCueAtTime(cues, time) {
-      if (!cues || cues.length === 0) return null;
-      // Apply timing offset
-      const adjustedTime = time + STATE.settings.timingOffset;
-      let lo = 0, hi = cues.length - 1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >>> 1;
-        const cue = cues[mid];
-        if (adjustedTime >= cue.start && adjustedTime < cue.end) return cue;
-        if (adjustedTime < cue.start) hi = mid - 1;
-        else lo = mid + 1;
-      }
-      return null;
-    },
-
-    findNearestCue(cues, time, window = 2.0) {
-      if (!cues || cues.length === 0) return null;
-      let best = null, bestDist = Infinity;
-      for (const cue of cues) {
-        const dist = Math.abs(time - cue.start);
-        if (dist < window && dist < bestDist) { bestDist = dist; best = cue; }
-      }
-      return best;
-    },
-
-    updateDisplay() {
-      const video = STATE.video;
-      if (!video || !STATE.settings.enabled) { this.hide(); return; }
-      const t = video.currentTime;
-      if (Math.abs(t - STATE.lastTime) < 0.05) return;
-      STATE.lastTime = t;
-
-      let p = this.findCueAtTime(STATE.primarySubtitles, t);
-      let s = this.findCueAtTime(STATE.secondarySubtitles, t);
-      if (p && !s) s = this.findNearestCue(STATE.secondarySubtitles, t, 2.0);
-      if (s && !p) p = this.findNearestCue(STATE.primarySubtitles, t, 2.0);
-      this.render(p, s);
-    },
-
-    render(primary, secondary) {
-      const overlay = STATE.overlay;
-      if (!overlay) return;
-      const pEl = overlay.querySelector('.dualsub-primary');
-      const sEl = overlay.querySelector('.dualsub-secondary');
-      if (!STATE.settings.enabled || (!primary && !secondary)) {
-        pEl.textContent = ''; sEl.textContent = '';
-        overlay.classList.remove('dualsub-active');
-        return;
-      }
-      overlay.classList.add('dualsub-active');
-
-      // Apply highlight if enabled
-      if (STATE.settings.highlightEnabled && window.__DualSub.Highlight) {
-        pEl.innerHTML = window.__DualSub.Highlight.highlightText(primary ? primary.text : '');
-        sEl.innerHTML = window.__DualSub.Highlight.highlightText(secondary ? secondary.text : '');
-      } else {
-        pEl.textContent = primary ? primary.text : '';
-        sEl.textContent = secondary ? secondary.text : '';
-      }
-
-      pEl.style.display = primary ? 'block' : 'none';
-      sEl.style.display = secondary ? 'block' : 'none';
-
-      // Sync transcript
-      if (window.__DualSub.Transcript) {
-        window.__DualSub.Transcript.sync(STATE.video ? STATE.video.currentTime : 0);
-      }
-    },
-
-    hide() {
-      if (!STATE.overlay) return;
-      STATE.overlay.classList.remove('dualsub-active');
-      const p = STATE.overlay.querySelector('.dualsub-primary');
-      const s = STATE.overlay.querySelector('.dualsub-secondary');
-      if (p) p.textContent = '';
-      if (s) s.textContent = '';
-    },
-
-    startLoop() {
-      if (STATE.animationId) return;
-      const loop = () => { this.updateDisplay(); STATE.animationId = requestAnimationFrame(loop); };
-      STATE.animationId = requestAnimationFrame(loop);
-    },
-
-    stopLoop() {
-      if (STATE.animationId) { cancelAnimationFrame(STATE.animationId); STATE.animationId = null; }
-    },
-
-    setupResizeObserver() {
-      if (!STATE.video) return;
-      const observer = new ResizeObserver(Util.debounce(() => this.positionOverlay(), 200));
-      observer.observe(STATE.video);
-      STATE.resizeObserver = observer;
-    },
-
-    /** Watch for scroll to update overlay position */
-    setupScrollListener() {
-      const handleScroll = Util.debounce(() => this.positionOverlay(), 100);
-      document.addEventListener('scroll', handleScroll, { passive: true, capture: true });
-      STATE.scrollListener = handleScroll;
-    },
-
-    /** Clean up all observers */
-    destroy() {
-      this.stopLoop();
-      if (STATE.resizeObserver) {
-        STATE.resizeObserver.disconnect();
-        STATE.resizeObserver = null;
-      }
-      // Clear retry timers
-      STATE._retryTimers.forEach(clearTimeout);
-      STATE._retryTimers = [];
-    },
-  };
-
-
-  // ============================================================
-  // SETTINGS MANAGEMENT
-  // ============================================================
-  const SettingsManager = {
-    async load() {
-      return new Promise((resolve) => {
-        chrome.storage.sync.get('dualsubSettings', (result) => {
-          if (result.dualsubSettings) {
-            STATE.settings = Util.deepMerge(STATE.settings, result.dualsubSettings);
-          }
-          resolve(STATE.settings);
-        });
+      var result = await this._bgMessage({
+        type: 'fetchCaptions',
+        videoId: videoId,
+        langCode: langCode,
       });
-    },
-    async save(settings) {
-      STATE.settings = Util.deepMerge(STATE.settings, settings);
-      return new Promise((resolve) => {
-        chrome.storage.sync.set({ dualsubSettings: STATE.settings }, resolve);
-      });
-    },
-    async setLanguagePair(primaryLang, secondaryLang, primaryLabel, secondaryLabel) {
-      STATE.settings.primaryLang = primaryLang;
-      STATE.settings.secondaryLang = secondaryLang;
-      STATE.settings.primaryLabel = primaryLabel || primaryLang;
-      STATE.settings.secondaryLabel = secondaryLabel || secondaryLang;
-      await this.save({});
-      await CaptionManager.loadSubtitles(STATE.availableTracks);
+      if (result && result.cues && result.cues.length > 0) {
+        console.log('[DualSub] Got ' + result.cues.length + ' cues for ' + langCode);
+        return result.cues;
+      }
+      console.warn('[DualSub] No captions for ' + langCode + ': ' + (result && result.error ? result.error : 'unknown'));
+      return [];
     },
   };
 
@@ -677,81 +257,61 @@
   // ============================================================
   const CaptionManager = {
     hasVideoChanged() {
-      var videoId = YouTubeCaptions.getVideoId();
+      var videoId = CaptionFetcher.getVideoId();
       if (videoId !== STATE.lastVideoId) {
         STATE.lastVideoId = videoId;
         STATE.primarySubtitles = [];
         STATE.secondarySubtitles = [];
-        STATE.availableTracks = [];
         STATE.isReady = false;
         return true;
       }
       return false;
     },
 
-    /** Phát hiện tracks mới */
-    async detectTracks() {
-      var tracks = await YouTubeCaptions.detectTracks();
-      STATE.availableTracks = tracks;
-      return tracks;
-    },
-
-    async loadSubtitles(tracks) {
-      if (STATE.isFetching) return;
-      STATE.isFetching = true;
-
-      // Snapshot current video ID
-      var currentVideoId = YouTubeCaptions.getVideoId();
-
-      try {
-        // Fetch both languages in PARALLEL
-        var results = await Promise.all([
-          YouTubeCaptions.fetchWithTranslation(tracks, STATE.settings.primaryLang),
-          YouTubeCaptions.fetchWithTranslation(tracks, STATE.settings.secondaryLang),
-        ]);
-
-        // GUARD: if video changed during fetch, discard results
-        if (YouTubeCaptions.getVideoId() !== currentVideoId) {
-          console.log('[DualSub] Video changed, discarding stale subtitles');
-          return;
-        }
-
-        STATE.primarySubtitles = results[0];
-        STATE.secondarySubtitles = results[1];
-
-        // Sort by start time for binary search
-        STATE.primarySubtitles.sort(function(a, b) { return a.start - b.start; });
-        STATE.secondarySubtitles.sort(function(a, b) { return a.start - b.start; });
-
-        console.log('[DualSub] Primary: ' + STATE.primarySubtitles.length + ', Secondary: ' + STATE.secondarySubtitles.length);
-        STATE.isReady = true;
-        STATE.retryCount = 0;
-
-        chrome.runtime.sendMessage({
-          type: 'subtitlesLoaded',
-          payload: {
-            primaryCount: STATE.primarySubtitles.length,
-            secondaryCount: STATE.secondarySubtitles.length,
-            primaryLang: STATE.settings.primaryLang,
-            secondaryLang: STATE.settings.secondaryLang,
-          },
-        });
-      } catch (err) {
-        console.error('[DualSub] Failed to load subtitles:', err);
-        if (STATE.retryCount < 3) {
-          STATE.retryCount++;
-          STATE._retryTimers.push(setTimeout(() => this.loadSubtitles(tracks), 2000 * STATE.retryCount));
-        }
-      } finally {
-        STATE.isFetching = false;
-      }
-    },
-
     async init() {
-      if (this.hasVideoChanged() || STATE.availableTracks.length === 0) {
-        var tracks = await this.detectTracks();
-        if (tracks.length > 0) { await this.loadSubtitles(tracks); return true; }
-        return false;
+      if (this.hasVideoChanged() || !STATE.isReady) {
+        STATE.isFetching = true;
+        var currentVideoId = CaptionFetcher.getVideoId();
+
+        try {
+          var results = await Promise.all([
+            CaptionFetcher.fetchForLanguage(STATE.settings.primaryLang),
+            CaptionFetcher.fetchForLanguage(STATE.settings.secondaryLang),
+          ]);
+
+          if (CaptionFetcher.getVideoId() !== currentVideoId) {
+            console.log('[DualSub] Video changed, discarding');
+            return;
+          }
+
+          STATE.primarySubtitles = results[0] || [];
+          STATE.secondarySubtitles = results[1] || [];
+          STATE.primarySubtitles.sort(function(a, b) { return a.start - b.start; });
+          STATE.secondarySubtitles.sort(function(a, b) { return a.start - b.start; });
+
+          console.log('[DualSub] Primary: ' + STATE.primarySubtitles.length + ', Secondary: ' + STATE.secondarySubtitles.length);
+          STATE.isReady = true;
+          STATE.retryCount = 0;
+
+          chrome.runtime.sendMessage({
+            type: 'subtitlesLoaded',
+            payload: {
+              primaryCount: STATE.primarySubtitles.length,
+              secondaryCount: STATE.secondarySubtitles.length,
+              primaryLang: STATE.settings.primaryLang,
+              secondaryLang: STATE.settings.secondaryLang,
+            },
+          });
+        } catch (err) {
+          console.error('[DualSub] Error:', err);
+          if (STATE.retryCount < 3) {
+            STATE.retryCount++;
+            STATE._retryTimers.push(setTimeout(function() { CaptionManager.init(); }, 2000 * STATE.retryCount));
+          }
+        } finally {
+          STATE.isFetching = false;
+        }
+        return STATE.isReady;
       }
       return STATE.isReady;
     },
