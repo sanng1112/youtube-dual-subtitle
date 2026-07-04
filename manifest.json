@@ -1,15 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "DualSub - YouTube Song Ngữ Anh Việt",
-  "version": "1.0.0",
-  "description": "Hiển thị phụ đề song ngữ Anh-Việt trên YouTube giúp học tiếng Anh qua các khóa học như CS231n, CS50, MIT OpenCourseWare và nhiều hơn nữa.",
+  "name": "DualSub - Học tiếng Anh qua phụ đề song ngữ",
+  "version": "2.0.0",
+  "description": "Phụ đề song ngữ Anh-Việt + từ điển + flashcard + transcript đồng bộ. Học tiếng Anh qua CS231n, CS50, MIT OpenCourseWare và nhiều hơn nữa.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "unlimitedStorage",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
-    "https://youtube.com/*"
+    "https://youtube.com/*",
+    "https://www.coursera.org/*",
+    "https://coursera.org/*",
+    "https://www.edx.org/*",
+    "https://edx.org/*",
+    "https://www.udemy.com/*",
+    "https://udemy.com/*",
+    "https://api.dictionaryapi.dev/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
@@ -24,16 +33,38 @@
     {
       "matches": [
         "https://www.youtube.com/*",
-        "https://youtube.com/*"
+        "https://youtube.com/*",
+        "https://www.coursera.org/*",
+        "https://coursera.org/*",
+        "https://www.edx.org/*",
+        "https://edx.org/*",
+        "https://www.udemy.com/*",
+        "https://udemy.com/*"
       ],
-      "js": ["content/content.js"],
-      "css": ["content/content.css"],
+      "js": [
+        "content/bootstrap.js",
+        "content/platform.js",
+        "content/dictionary.js",
+        "content/vocabulary.js",
+        "content/transcript.js",
+        "content/highlight.js",
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css",
+        "content/dictionary.css",
+        "content/transcript.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "background": {
     "service_worker": "background/background.js"
   },
+  "web_accessible_resources": [{
+    "resources": ["content/*", "icons/*"],
+    "matches": ["https://www.youtube.com/*", "https://youtube.com/*", "https://www.coursera.org/*", "https://coursera.org/*", "https://www.edx.org/*", "https://edx.org/*", "https://www.udemy.com/*", "https://udemy.com/*"]
+  }],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

@@ -292,3 +292,60 @@ input[type='range']::-webkit-slider-thumb {
   flex-direction: column;
   gap: 2px;
 }
+
+/* Timing controls */
+.timing-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-timing {
+  padding: 4px 8px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.btn-timing:hover { background: rgba(255,255,255,0.15); }
+.btn-timing-reset {
+  padding: 2px 10px;
+  background: none;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.btn-timing-reset:hover { border-color: #4fc3f7; color: #4fc3f7; }
+
+/* Highlight checkbox */
+.setting-row label input[type="checkbox"] {
+  margin-right: 6px;
+}
+
+/* Hint text */
+.hint {
+  font-size: 11px;
+  color: #666;
+  display: block;
+  margin-top: 6px;
+}
+.hint kbd {
+  background: rgba(255,255,255,0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: monospace;
+  color: #aaa;
+}
+
+/* Vocab info */
+.vocab-info {
+  font-size: 13px;
+  color: #ccc;
+}
+.vocab-info strong { color: #4fc3f7; }

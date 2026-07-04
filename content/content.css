@@ -1,10 +1,9 @@
 /* ============================================================
-   DualSub - YouTube Dual Subtitle Overlay Styles
+   DualSub v2.0 - Core Styles
    ============================================================ */
-
 #dualsub-overlay {
   position: fixed;
-  z-index: 2147483647;
+  z-index: 2147483646;
   pointer-events: none;
   display: flex;
   flex-direction: column;
@@ -15,12 +14,7 @@
   transition: opacity 0.15s ease;
   opacity: 0;
 }
-
-#dualsub-overlay.dualsub-active {
-  opacity: 1;
-}
-
-/* Main container for subtitle cues */
+#dualsub-overlay.dualsub-active { opacity: 1; }
 #dualsub-overlay .dualsub-container {
   max-width: 80%;
   text-align: center;
@@ -28,8 +22,6 @@
   flex-direction: column;
   gap: 4px;
 }
-
-/* Individual cue styling */
 #dualsub-overlay .dualsub-cue {
   font-family: 'YouTube Noto', 'Roboto', Arial, sans-serif;
   line-height: 1.4;
@@ -37,70 +29,42 @@
   white-space: pre-wrap;
   padding: 4px 12px;
   border-radius: 4px;
-  text-shadow: 0 0 4px rgba(0, 0, 0, 0.8), 1px 1px 2px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 0 4px rgba(0,0,0,0.8), 1px 1px 2px rgba(0,0,0,0.6);
   display: none;
   user-select: none;
   -webkit-font-smoothing: antialiased;
+  pointer-events: auto;
+  cursor: pointer;
 }
-
-/* Primary subtitle (e.g., English) */
 #dualsub-overlay .dualsub-primary {
-  color: #ffffff;
+  color: #fff;
   font-size: 18px;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0,0,0,0.6);
   font-weight: 500;
 }
-
-/* Secondary subtitle (e.g., Vietnamese) */
 #dualsub-overlay .dualsub-secondary {
   color: #00e5ff;
   font-size: 15px;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0,0,0,0.5);
   font-weight: 400;
 }
-
-/* Small status badge */
-#dualsub-overlay .dualsub-status {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.5);
-  font-family: Arial, sans-serif;
-  opacity: 0.6;
-  pointer-events: auto;
-  display: none;
-}
-
-#dualsub-overlay.dualsub-active .dualsub-status {
-  display: block;
-}
-
-/* Animation */
-#dualsub-overlay .dualsub-cue {
-  animation: dualsub-fade-in 0.2s ease;
-}
-
+#dualsub-overlay .dualsub-cue { animation: dualsub-fade-in 0.2s ease; }
 @keyframes dualsub-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-/* Responsive adjustments */
+/* Highlighted words */
+.dualsub-hl {
+  border-bottom: 2px solid #ffd700;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.dualsub-hl:hover { background: rgba(255, 215, 0, 0.2); }
+
+/* Responsive */
 @media (max-width: 640px) {
-  #dualsub-overlay .dualsub-container {
-    max-width: 95%;
-  }
-  #dualsub-overlay .dualsub-primary {
-    font-size: 14px;
-  }
-  #dualsub-overlay .dualsub-secondary {
-    font-size: 12px;
-  }
+  #dualsub-overlay .dualsub-container { max-width: 95%; }
+  #dualsub-overlay .dualsub-primary { font-size: 14px; }
+  #dualsub-overlay .dualsub-secondary { font-size: 12px; }
 }

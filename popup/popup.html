@@ -13,7 +13,7 @@
       <img src="../icons/icon48.png" alt="DualSub" class="logo" />
       <div class="header-text">
         <h1>DualSub</h1>
-        <span class="subtitle">Phụ đề song ngữ YouTube</span>
+        <span class="subtitle">Phụ đề song ngữ + Từ điển + Flashcard</span>
       </div>
       <label class="toggle-switch">
         <input type="checkbox" id="toggleEnabled" checked />
@@ -27,9 +27,23 @@
       <span id="statusText">Đang tải...</span>
     </div>
 
+    <!-- Feature 3: Timing Adjustment -->
+    <div class="section">
+      <h3>⏱ Căn chỉnh phụ đề</h3>
+      <div class="setting-row">
+        <label>Đồng bộ: <span id="timingLabel">0.0</span>s</label>
+        <div class="timing-controls">
+          <button id="btnTimingMinus" class="btn-timing">−0.5</button>
+          <input type="range" id="timingSlider" min="-10" max="10" step="0.5" value="0" />
+          <button id="btnTimingPlus" class="btn-timing">+0.5</button>
+        </div>
+      </div>
+      <button id="btnTimingReset" class="btn-timing-reset">Reset</button>
+    </div>
+
     <!-- Language Selection -->
     <div class="section">
-      <h3>Ngôn ngữ</h3>
+      <h3>🌐 Ngôn ngữ</h3>
       <div class="lang-row">
         <div class="lang-group">
           <label for="primaryLang">Ngôn ngữ chính</label>
@@ -62,7 +76,7 @@
 
     <!-- Appearance -->
     <div class="section">
-      <h3>Hiển thị</h3>
+      <h3>🎨 Hiển thị</h3>
       <div class="setting-row">
         <label for="positionSelect">Vị trí</label>
         <select id="positionSelect">
@@ -76,9 +90,44 @@
       </div>
     </div>
 
+    <!-- Feature 4: Word Highlight -->
+    <div class="section">
+      <h3>🖍 Highlight từ vựng</h3>
+      <div class="setting-row">
+        <label>
+          <input type="checkbox" id="highlightToggle" />
+          Tô màu từ khó
+        </label>
+        <select id="highlightLevel">
+          <option value="beginner">Cơ bản (top 100)</option>
+          <option value="intermediate">Trung cấp (top 300)</option>
+          <option value="advanced">Nâng cao (top 500+)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Feature 6: Transcript -->
+    <div class="section">
+      <h3>📜 Transcript đồng bộ</h3>
+      <button id="btnTranscript" class="btn btn-secondary">Mở Transcript</button>
+      <span class="hint">Phím tắt: nhấn <kbd>T</kbd></span>
+    </div>
+
+    <!-- Feature 2: Vocabulary -->
+    <div class="section">
+      <h3>📚 Từ vựng đã tra</h3>
+      <div class="vocab-info">
+        <span>Số từ: <strong id="vocabCount">0</strong></span>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="btnExportCSV" class="btn btn-secondary">📥 Export CSV</button>
+        <button id="btnExportAnki" class="btn btn-secondary">📥 Export Anki</button>
+      </div>
+    </div>
+
     <!-- Video Info -->
     <div class="section video-info">
-      <h3>Thông tin phụ đề</h3>
+      <h3>ℹ Thông tin phụ đề</h3>
       <div class="info-grid">
         <div class="info-item">
           <span class="info-label">Chính:</span>
@@ -103,7 +152,7 @@
 
     <!-- Footer -->
     <div class="footer">
-      <span>DualSub v1.0.0</span>
+      <span>DualSub v2.0.0</span>
       <span>Học tiếng Anh qua khóa học CS</span>
     </div>
   </div>

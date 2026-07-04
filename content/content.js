@@ -7,7 +7,7 @@
   'use strict';
 
   // ============================================================
-  // STATE
+  // STATE (exposed to DS for other modules)
   // ============================================================
   const STATE = {
     video: null,
@@ -28,6 +28,11 @@
       secondaryColor: '#00e5ff',
       backgroundColor: 'rgba(0, 0, 0, 0.6)',
       showSpeakerLabel: true,
+      // NEW FEATURES
+      timingOffset: 0,        // Feature 3: ± seconds adjust
+      highlightEnabled: false, // Feature 4: word highlighting
+      highlightLevel: 'advanced',
+      transcriptVisible: false,// Feature 6: transcript panel
     },
     availableTracks: [],
     isReady: false,
@@ -41,6 +46,9 @@
     scrollListener: null,
     _retryTimers: [],
   };
+
+  // Expose STATE to DS modules
+  window.__DualSub._STATE = STATE;
 
   // ============================================================
   // UTILITY
@@ -349,12 +357,14 @@
 
     findCueAtTime(cues, time) {
       if (!cues || cues.length === 0) return null;
+      // Apply timing offset
+      const adjustedTime = time + STATE.settings.timingOffset;
       let lo = 0, hi = cues.length - 1;
       while (lo <= hi) {
         const mid = (lo + hi) >>> 1;
         const cue = cues[mid];
-        if (time >= cue.start && time < cue.end) return cue;
-        if (time < cue.start) hi = mid - 1;
+        if (adjustedTime >= cue.start && adjustedTime < cue.end) return cue;
+        if (adjustedTime < cue.start) hi = mid - 1;
         else lo = mid + 1;
       }
       return null;
@@ -395,10 +405,23 @@
         return;
       }
       overlay.classList.add('dualsub-active');
-      pEl.textContent = primary ? primary.text : '';
+
+      // Apply highlight if enabled
+      if (STATE.settings.highlightEnabled && window.__DualSub.Highlight) {
+        pEl.innerHTML = window.__DualSub.Highlight.highlightText(primary ? primary.text : '');
+        sEl.innerHTML = window.__DualSub.Highlight.highlightText(secondary ? secondary.text : '');
+      } else {
+        pEl.textContent = primary ? primary.text : '';
+        sEl.textContent = secondary ? secondary.text : '';
+      }
+
       pEl.style.display = primary ? 'block' : 'none';
-      sEl.textContent = secondary ? secondary.text : '';
       sEl.style.display = secondary ? 'block' : 'none';
+
+      // Sync transcript
+      if (window.__DualSub.Transcript) {
+        window.__DualSub.Transcript.sync(STATE.video ? STATE.video.currentTime : 0);
+      }
     },
 
     hide() {
@@ -655,6 +678,46 @@
             DualSubUI.applySettings();
             sendResponse({ success: true });
             break;
+
+          // NEW FEATURE MESSAGES
+          case 'setTimingOffset':
+            STATE.settings.timingOffset = request.payload.offset;
+            SettingsManager.save({ timingOffset: request.payload.offset });
+            sendResponse({ success: true });
+            break;
+          case 'setHighlightEnabled':
+            STATE.settings.highlightEnabled = request.payload.enabled;
+            if (window.__DualSub.Highlight) {
+              window.__DualSub.Highlight.setEnabled(request.payload.enabled);
+              if (request.payload.level) {
+                STATE.settings.highlightLevel = request.payload.level;
+                window.__DualSub.Highlight.setLevel(request.payload.level);
+              }
+            }
+            SettingsManager.save({
+              highlightEnabled: request.payload.enabled,
+              highlightLevel: request.payload.level || STATE.settings.highlightLevel,
+            });
+            sendResponse({ success: true });
+            break;
+          case 'transcriptToggle':
+            if (window.__DualSub.Transcript) {
+              window.__DualSub.Transcript.toggle();
+              STATE.settings.transcriptVisible = window.__DualSub.Transcript._visible || false;
+              SettingsManager.save({ transcriptVisible: STATE.settings.transcriptVisible });
+            }
+            sendResponse({ success: true });
+            break;
+          case 'exportVocabulary':
+            (async () => {
+              const format = request.payload.format || 'csv';
+              const data = format === 'anki'
+                ? await window.__DualSub.Vocabulary.exportAnki()
+                : await window.__DualSub.Vocabulary.exportCSV();
+              sendResponse({ success: !!data, data, format, count: await window.__DualSub.Vocabulary.getCount() });
+            })();
+            return true;
+
           default:
             sendResponse({ error: 'Unknown type' });
         }
@@ -671,6 +734,17 @@
     async init() {
       console.log('[DualSub] Initializing...');
       await SettingsManager.load();
+
+      // Initialize feature modules
+      if (window.__DualSub.Dictionary) window.__DualSub.Dictionary.init();
+      if (window.__DualSub.Vocabulary) {} // No init needed, lazy load
+      if (window.__DualSub.Transcript) window.__DualSub.Transcript.init();
+      if (window.__DualSub.Highlight) {
+        window.__DualSub.Highlight.init();
+        window.__DualSub.Highlight.setEnabled(STATE.settings.highlightEnabled);
+        window.__DualSub.Highlight.setLevel(STATE.settings.highlightLevel);
+      }
+
       await this.waitForVideo();
       DualSubUI.getOverlay();
       DualSubUI.applySettings();
@@ -680,6 +754,12 @@
       DualSubUI.startLoop();
       MessageHandler.setup();
       this.setupYouTubeNavigationDetection();
+
+      // Show transcript if was visible
+      if (STATE.settings.transcriptVisible && window.__DualSub.Transcript) {
+        setTimeout(() => window.__DualSub.Transcript.show(), 1500);
+      }
+
       console.log('[DualSub] Initialized successfully');
     },
 
