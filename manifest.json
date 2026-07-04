@@ -6,8 +6,7 @@
   "permissions": [
     "storage",
     "activeTab",
-    "unlimitedStorage",
-    "clipboardWrite"
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
